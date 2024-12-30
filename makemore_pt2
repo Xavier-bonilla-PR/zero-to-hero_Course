@@ -1,0 +1,150 @@
+import torch
+import torch.nn.functional as F
+import matplotlib.pyplot as plt # for making figures
+
+# read in all the words
+words = open('names.txt', 'r').read().splitlines()
+
+# build the vocabulary of characters and mappings to/from integers
+chars = sorted(list(set(''.join(words))))
+stoi = {s:i+1 for i,s in enumerate(chars)}
+stoi['.'] = 0
+itos = {i:s for s,i in stoi.items()}
+
+#Builds dataset of context size and character it predicts
+def build_dataset(words):
+    block_size = 3  # context length
+    X, Y = [], [] #input & label
+    for w in words:
+        context = [0] * block_size 
+        for ch in w + '.':
+            ix = stoi[ch]
+            X.append(context)
+            Y.append(ix)
+            context = context[1:] + [ix]  # crop and append
+
+    X = torch.tensor(X)
+    Y = torch.tensor(Y)
+    return X, Y
+
+import random
+random.seed(42)
+random.shuffle(words)
+n1 = int(0.8*len(words)) #80% of the list
+n2 = int(0.9*len(words)) #90% of the list
+
+Xtr, Ytr = build_dataset(words[:n1]) #80% of words fro training
+print('Xtr and Ytr is:')
+print(Xtr.shape, Ytr.shape)
+Xdev, Ydev = build_dataset(words[n1:n2]) #10% of words for dev/validate
+print('Xdev and Ydev is:')
+print(Xdev.shape, Ydev.shape)
+Xte, Yte = build_dataset(words[n2:]) #10% of words for test
+print('Xte and Yte is:')
+print(Xte.shape, Yte.shape)
+
+#------------#--------#
+g = torch.Generator().manual_seed(2147483647)
+C = torch.randn((27,10), generator=g) #10 dimensions
+W1 = torch.randn((30,200), generator=g)
+b1 = torch.randn(200, generator=g)
+W2 = torch.randn((200,27), generator=g)
+b2 = torch.randn(27, generator=g)
+parameters = [C, W1, b1, W2, b2]
+
+print(sum(p.nelement() for p in parameters)) #Number of parameters in total: 3481
+
+
+for p in parameters:
+    p.requires_grad = True
+
+
+#learning rate
+lre = torch.linspace(-3, 0, 1000) #generate 1000 numbers between -3 and 0
+lrs = 10**lre #Cause 10**-3 is 0.001 and 10**0 is 1
+
+lri = []
+lossi = []
+stepi = []
+for i in range(1000):
+    #minibatch construct
+    ix = torch.randint(0, Xtr.shape[0], (32,)) #make 32 number between 0 and X.shape[0]=# of sequences or # of chars
+    #Foward pass
+    emb = C[Xtr[ix]] #takes 32 random sequences from all the names analyzed
+    h = torch.tanh(emb.view(-1, 30) @ W1 + b1)
+    logits = h @ W2 + b2
+    loss = F.cross_entropy(logits, Ytr[ix])
+
+    #backward pass
+    for p in parameters:
+        p.grad = None
+    loss.backward()
+
+    #update
+    lr = 0.1 if i < 60000 else 0.01
+    for p in parameters:
+        p.data += -lr *p.grad
+
+    #track stats
+    # lri.append(lre[i])
+    stepi.append(i) #number of steps
+    lossi.append(loss.log10().item()) #Log10() squashes it so that it looks nicer in a table
+
+#Shows loss per step. Has noise due to batch size
+plt.plot(stepi, lossi)
+plt.show()
+
+print(loss.item())
+
+#Validation set
+emb = C[Xdev] #takes 32 random sequences from all the names analyzed
+h = torch.tanh(emb.view(-1, 30) @ W1 + b1)
+logits = h @ W2 + b2
+loss = F.cross_entropy(logits, Ydev)
+print(loss.item())
+
+# test loss
+emb = C[Xte] # (32, 3, 2)
+h = torch.tanh(emb.view(-1, 30) @ W1 + b1) # (32, 100)
+logits = h @ W2 + b2 # (32, 27)
+loss = F.cross_entropy(logits, Yte)
+loss
+print(loss.item())
+
+#Visualize embeddings
+# plt.figure(figsize=(8,8))
+# plt.scatter(C[:,0].data, C[:,1].data, s=200) #X and Y coords
+# for i in range(C.shape[0]):
+#     plt.text(C[i,0].item(), C[i,1].item(), itos[i], ha="center", va="center", color="white")
+# plt.grid('minor')
+# plt.show
+
+# loss and loss Dev
+# 2.320568084716797
+# 2.2029123306274414
+# 2.207352638244629
+
+#Sample from the model
+g = torch.Generator().manual_seed(2147483647 + 10)
+block_size = 3
+
+# sample from the model
+g = torch.Generator().manual_seed(2147483647 + 10)
+
+for _ in range(20):
+    
+    out = []
+    context = [0] * block_size # initialize with all ...
+    while True:
+      emb = C[torch.tensor([context])] # (1,block_size,d)
+      h = torch.tanh(emb.view(1, -1) @ W1 + b1)
+      logits = h @ W2 + b2
+      probs = F.softmax(logits, dim=1)
+      print(probs)
+      ix = torch.multinomial(probs, num_samples=1, generator=g).item()
+      context = context[1:] + [ix]
+      out.append(ix)
+      if ix == 0:
+        break
+    
+    print(''.join(itos[i] for i in out))
